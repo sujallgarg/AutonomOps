@@ -24,6 +24,22 @@ export function UserProfileDropdown({ session, onOpenAuthModal }: UserProfileDro
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (session?.email) {
+      fetch('/api/owners')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success && data.owners) {
+            const owner = data.owners.find((o: any) => o.email?.toLowerCase() === session.email.toLowerCase());
+            if (owner) {
+              setIsSubscribed(Boolean(owner.is_premium));
+            }
+          }
+        })
+        .catch((err) => console.error('Error fetching owner subscription status:', err));
+    }
+  }, [session?.email]);
+
   const handleLogout = () => {
     clearStoredSession();
     setIsOpen(false);

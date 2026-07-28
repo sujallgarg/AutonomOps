@@ -340,7 +340,7 @@ export interface DbUser {
   email: string;
   role: 'client' | 'owner';
   is_premium: boolean;
-  free_trial_expires_at: string;
+  free_trial_expires_at: string | null;
   total_earnings: number;
   created_at: string;
 }
@@ -354,16 +354,19 @@ export async function getAllUsersFromDb(): Promise<DbUser[]> {
     const res = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
     if (res.rows.length === 0) return inMemoryUsers;
 
-    return res.rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      email: row.email,
-      role: row.role,
-      is_premium: Boolean(row.is_premium),
-      free_trial_expires_at: row.free_trial_expires_at ? new Date(row.free_trial_expires_at).toISOString() : new Date(Date.now() + 15 * 86400000).toISOString(),
-      total_earnings: Number(row.total_earnings || 0),
-      created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
-    }));
+    return res.rows.map((row) => {
+      const isPremium = Boolean(row.is_premium);
+      return {
+        id: row.id,
+        name: row.name,
+        email: row.email,
+        role: row.role,
+        is_premium: isPremium,
+        free_trial_expires_at: isPremium ? null : (row.free_trial_expires_at ? new Date(row.free_trial_expires_at).toISOString() : new Date(Date.now() + 15 * 86400000).toISOString()),
+        total_earnings: Number(row.total_earnings || 0),
+        created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
+      };
+    });
   } catch (err) {
     console.error('PostgreSQL getAllUsers Error:', err);
     return inMemoryUsers;
@@ -376,6 +379,8 @@ export async function saveOrUpdateUserInDb(user: {
   role: 'client' | 'owner';
   is_premium?: boolean;
 }): Promise<DbUser> {
+  const existingUser = inMemoryUsers.find((u) => u.email === user.email);
+  const isPremium = user.is_premium !== undefined ? user.is_premium : (existingUser ? existingUser.is_premium : false);
   const trialExpires = new Date();
   trialExpires.setDate(trialExpires.getDate() + 15);
 
@@ -384,15 +389,20 @@ export async function saveOrUpdateUserInDb(user: {
     name: user.name,
     email: user.email,
     role: user.role,
-    is_premium: user.is_premium ?? true,
-    free_trial_expires_at: trialExpires.toISOString(),
-    total_earnings: user.role === 'owner' ? 1.00 : 0.00,
+    is_premium: isPremium,
+    free_trial_expires_at: isPremium ? null : trialExpires.toISOString(),
+    total_earnings: 0.00,
     created_at: new Date().toISOString()
   };
 
   const existingIndex = inMemoryUsers.findIndex((u) => u.email === user.email);
   if (existingIndex >= 0) {
-    inMemoryUsers[existingIndex] = { ...inMemoryUsers[existingIndex], ...userObj };
+    inMemoryUsers[existingIndex] = {
+      ...inMemoryUsers[existingIndex],
+      ...userObj,
+      is_premium: isPremium,
+      free_trial_expires_at: isPremium ? null : (inMemoryUsers[existingIndex].free_trial_expires_at || trialExpires.toISOString())
+    };
   } else {
     inMemoryUsers.unshift(userObj);
   }
@@ -406,19 +416,21 @@ export async function saveOrUpdateUserInDb(user: {
        ON CONFLICT (email) DO UPDATE SET
          name = EXCLUDED.name,
          role = EXCLUDED.role,
-         is_premium = EXCLUDED.is_premium
+         is_premium = EXCLUDED.is_premium,
+         free_trial_expires_at = CASE WHEN EXCLUDED.is_premium = TRUE THEN NULL ELSE users.free_trial_expires_at END
        RETURNING *;`,
-      [userObj.id, userObj.name, userObj.email, userObj.role, userObj.is_premium, trialExpires, userObj.total_earnings]
+      [userObj.id, userObj.name, userObj.email, userObj.role, isPremium, isPremium ? null : trialExpires, userObj.total_earnings]
     );
 
     const row = res.rows[0];
+    const rowIsPremium = Boolean(row.is_premium);
     return {
       id: String(row.id),
       name: row.name,
       email: row.email,
       role: row.role,
-      is_premium: Boolean(row.is_premium),
-      free_trial_expires_at: row.free_trial_expires_at ? new Date(row.free_trial_expires_at).toISOString() : new Date().toISOString(),
+      is_premium: rowIsPremium,
+      free_trial_expires_at: rowIsPremium ? null : (row.free_trial_expires_at ? new Date(row.free_trial_expires_at).toISOString() : new Date().toISOString()),
       total_earnings: Number(row.total_earnings || 0),
       created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
     };
@@ -430,18 +442,20 @@ export async function saveOrUpdateUserInDb(user: {
          ON CONFLICT (email) DO UPDATE SET
            name = EXCLUDED.name,
            role = EXCLUDED.role,
-           is_premium = EXCLUDED.is_premium
+           is_premium = EXCLUDED.is_premium,
+           free_trial_expires_at = CASE WHEN EXCLUDED.is_premium = TRUE THEN NULL ELSE users.free_trial_expires_at END
          RETURNING *;`,
-        [userObj.name, userObj.email, userObj.role, userObj.is_premium, trialExpires, userObj.total_earnings]
+        [userObj.name, userObj.email, userObj.role, isPremium, isPremium ? null : trialExpires, userObj.total_earnings]
       );
       const row = fallbackRes.rows[0];
+      const rowIsPremium = Boolean(row.is_premium);
       return {
         id: String(row.id),
         name: row.name,
         email: row.email,
         role: row.role,
-        is_premium: Boolean(row.is_premium),
-        free_trial_expires_at: row.free_trial_expires_at ? new Date(row.free_trial_expires_at).toISOString() : new Date().toISOString(),
+        is_premium: rowIsPremium,
+        free_trial_expires_at: rowIsPremium ? null : (row.free_trial_expires_at ? new Date(row.free_trial_expires_at).toISOString() : new Date().toISOString()),
         total_earnings: Number(row.total_earnings || 0),
         created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
       };
@@ -463,7 +477,7 @@ export interface DbBusinessOwner {
   status: string;
   verification_status: string;
   is_premium: boolean;
-  free_trial_expires_at: string;
+  free_trial_expires_at: string | null;
   total_match_fees: number;
   total_deposit_earnings: number;
   total_approved_orders: number;
@@ -487,6 +501,7 @@ export async function getAllBusinessOwnersFromDb(): Promise<DbBusinessOwner[]> {
     const map = new Map<string, DbBusinessOwner>();
 
     res.rows.forEach((row) => {
+      const isPremium = Boolean(row.is_premium);
       map.set(row.email.toLowerCase(), {
         id: row.id,
         name: row.name,
@@ -495,8 +510,8 @@ export async function getAllBusinessOwnersFromDb(): Promise<DbBusinessOwner[]> {
         specialty: row.specialty || 'Full-Stack Web & AI Architecture',
         status: row.status || 'active',
         verification_status: row.verification_status || 'verified',
-        is_premium: Boolean(row.is_premium ?? true),
-        free_trial_expires_at: row.free_trial_expires_at ? new Date(row.free_trial_expires_at).toISOString() : new Date(Date.now() + 15 * 86400000).toISOString(),
+        is_premium: isPremium,
+        free_trial_expires_at: isPremium ? null : (row.free_trial_expires_at ? new Date(row.free_trial_expires_at).toISOString() : new Date(Date.now() + 15 * 86400000).toISOString()),
         total_match_fees: Number(row.total_match_fees || 0),
         total_deposit_earnings: Number(row.total_deposit_earnings || 0),
         total_approved_orders: Number(row.total_approved_orders || 0),
@@ -506,6 +521,7 @@ export async function getAllBusinessOwnersFromDb(): Promise<DbBusinessOwner[]> {
 
     userOwnersRes.rows.forEach((row: any) => {
       if (!map.has(row.email.toLowerCase())) {
+        const isPremium = Boolean(row.is_premium);
         map.set(row.email.toLowerCase(), {
           id: `owner_${row.email.replace(/[^a-zA-Z0-9]/g, '_')}`,
           name: row.name,
@@ -514,8 +530,8 @@ export async function getAllBusinessOwnersFromDb(): Promise<DbBusinessOwner[]> {
           specialty: 'Full-Stack Web & AI Architecture',
           status: 'active',
           verification_status: 'verified',
-          is_premium: Boolean(row.is_premium ?? true),
-          free_trial_expires_at: row.free_trial_expires_at ? new Date(row.free_trial_expires_at).toISOString() : new Date(Date.now() + 15 * 86400000).toISOString(),
+          is_premium: isPremium,
+          free_trial_expires_at: isPremium ? null : (row.free_trial_expires_at ? new Date(row.free_trial_expires_at).toISOString() : new Date(Date.now() + 15 * 86400000).toISOString()),
           total_match_fees: Number(row.total_earnings || 0),
           total_deposit_earnings: 0.00,
           total_approved_orders: 0,
@@ -553,6 +569,9 @@ export async function saveOrUpdateBusinessOwnerInDb(owner: {
   const trialExpires = new Date();
   trialExpires.setDate(trialExpires.getDate() + 15);
 
+  const existingOwner = inMemoryBusinessOwners.find((o) => o.email === owner.email);
+  const isPremium = owner.is_premium !== undefined ? owner.is_premium : (existingOwner ? existingOwner.is_premium : false);
+
   const ownerObj: DbBusinessOwner = {
     id: `owner_${owner.email.replace(/[^a-zA-Z0-9]/g, '_')}`,
     name: owner.name,
@@ -561,8 +580,8 @@ export async function saveOrUpdateBusinessOwnerInDb(owner: {
     specialty: owner.specialty || 'Full-Stack Web & AI Architecture',
     status: 'active',
     verification_status: 'verified',
-    is_premium: owner.is_premium ?? true,
-    free_trial_expires_at: trialExpires.toISOString(),
+    is_premium: isPremium,
+    free_trial_expires_at: isPremium ? null : trialExpires.toISOString(),
     total_match_fees: owner.total_match_fees ?? 0.00,
     total_deposit_earnings: owner.total_deposit_earnings ?? 0.00,
     total_approved_orders: owner.total_approved_orders ?? 0,
@@ -574,6 +593,8 @@ export async function saveOrUpdateBusinessOwnerInDb(owner: {
     inMemoryBusinessOwners[existingIndex] = {
       ...inMemoryBusinessOwners[existingIndex],
       ...ownerObj,
+      is_premium: isPremium,
+      free_trial_expires_at: isPremium ? null : (inMemoryBusinessOwners[existingIndex].free_trial_expires_at || trialExpires.toISOString()),
       total_match_fees: (inMemoryBusinessOwners[existingIndex].total_match_fees || 0) + (owner.total_match_fees || 0),
       total_approved_orders: (inMemoryBusinessOwners[existingIndex].total_approved_orders || 0) + (owner.total_approved_orders || 0)
     };
@@ -591,6 +612,7 @@ export async function saveOrUpdateBusinessOwnerInDb(owner: {
          name = EXCLUDED.name,
          phone = EXCLUDED.phone,
          is_premium = EXCLUDED.is_premium,
+         free_trial_expires_at = CASE WHEN EXCLUDED.is_premium = TRUE THEN NULL ELSE business_owners.free_trial_expires_at END,
          total_match_fees = business_owners.total_match_fees + EXCLUDED.total_match_fees,
          total_approved_orders = business_owners.total_approved_orders + EXCLUDED.total_approved_orders
        RETURNING *;`,
@@ -602,8 +624,8 @@ export async function saveOrUpdateBusinessOwnerInDb(owner: {
         ownerObj.specialty,
         ownerObj.status,
         ownerObj.verification_status,
-        ownerObj.is_premium,
-        trialExpires,
+        isPremium,
+        isPremium ? null : trialExpires,
         ownerObj.total_match_fees,
         ownerObj.total_deposit_earnings,
         ownerObj.total_approved_orders
@@ -611,6 +633,7 @@ export async function saveOrUpdateBusinessOwnerInDb(owner: {
     );
 
     const row = res.rows[0];
+    const rowIsPremium = Boolean(row.is_premium);
     return {
       id: row.id,
       name: row.name,
@@ -619,8 +642,8 @@ export async function saveOrUpdateBusinessOwnerInDb(owner: {
       specialty: row.specialty || 'Full-Stack Web & AI Architecture',
       status: row.status || 'active',
       verification_status: row.verification_status || 'verified',
-      is_premium: Boolean(row.is_premium ?? true),
-      free_trial_expires_at: row.free_trial_expires_at ? new Date(row.free_trial_expires_at).toISOString() : trialExpires.toISOString(),
+      is_premium: rowIsPremium,
+      free_trial_expires_at: rowIsPremium ? null : (row.free_trial_expires_at ? new Date(row.free_trial_expires_at).toISOString() : trialExpires.toISOString()),
       total_match_fees: Number(row.total_match_fees || 0),
       total_deposit_earnings: Number(row.total_deposit_earnings || 0),
       total_approved_orders: Number(row.total_approved_orders || 0),

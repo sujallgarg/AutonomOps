@@ -70,18 +70,18 @@ export function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
     setStoredSession(session);
 
     try {
-      // Record login details & subscription in PostgreSQL Database
+      // Record login details & free trial status in PostgreSQL Database
       await fetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmedName, email: trimmedEmail, role, is_premium: true })
+        body: JSON.stringify({ name: trimmedName, email: trimmedEmail, role, is_premium: false })
       });
 
       if (role === 'owner') {
         await fetch('/api/owners', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: trimmedName, email: trimmedEmail })
+          body: JSON.stringify({ name: trimmedName, email: trimmedEmail, is_premium: false })
         });
       }
     } catch (err) {

@@ -85,6 +85,16 @@ function StripeCheckoutContent() {
             is_premium: true
           })
         });
+        await fetch('/api/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: cardHolder,
+            email: email,
+            role: 'owner',
+            is_premium: true
+          })
+        });
       } else if (type === 'match_fee') {
         await fetch('/api/owners', {
           method: 'POST',

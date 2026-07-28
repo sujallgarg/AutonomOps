@@ -69,6 +69,7 @@ export function OwnerDashboard({ onReturnHome, leads: propLeads, onUpdateLeadSta
   const [session, setSession] = useState<UserSession | null>(null);
 
   const [selectedWorkCategory, setSelectedWorkCategory] = useState<string>('ALL');
+  const [filterByMySpecialtyOnly, setFilterByMySpecialtyOnly] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'leads' | 'review' | 'bookings' | 'add_service' | 'pricing' | 'logs' | 'payments'>('review');
   const [logs, setLogs] = useState<StructuredExecutionLog[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -179,56 +180,32 @@ export function OwnerDashboard({ onReturnHome, leads: propLeads, onUpdateLeadSta
     return Date.now() - createdAt > fifteenDaysMs;
   }, [dbOwners, session, isProUnlocked]);
 
-  // Handler for $5.00 Pro Owner Subscription
+  // Handler for $5.00 Pro Owner Subscription — Redirects to Stripe Gateway
   const handlePayProSubscription = async () => {
     setIsSubscribingPro(true);
-    setTimeout(async () => {
-      setIsSubscribingPro(false);
-      setIsProUnlocked(true);
-
-      if (session?.email) {
-        try {
-          await fetch('/api/owners', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: session.name || 'Business Owner',
-              email: session.email,
-              is_premium: true
-            })
-          });
-
-          await fetch('/api/users', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: session.name || 'Business Owner',
-              email: session.email,
-              role: 'owner',
-              is_premium: true
-            })
-          });
-
-          await fetch('/api/payments', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              user_name: session.name || 'Business Owner',
-              user_email: session.email,
-              type: '$5.00 Pro Subscription',
-              amount: 5.00,
-              description: 'Upgraded 15-Day Trial to Pro Owner Subscription'
-            })
-          });
-        } catch (err) {
-          console.error('Subscription error:', err);
-        }
+    try {
+      const res = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'subscription',
+          amount: 5.00,
+          title: 'AutonomOps Pro Owner Subscription',
+          email: session?.email || 'owner@autonomops.io',
+          name: session?.name || 'Business Owner',
+          returnUrl: '/dashboard'
+        })
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+        return;
       }
-
-      setNotificationMsg('🎉 $5.00/mo Pro Subscription Activated! Dashboard Unlocked.');
-      loadDbData();
-      setTimeout(() => setNotificationMsg(''), 5000);
-    }, 1200);
+    } catch (err) {
+      console.error('Stripe Pro Subscription redirect error:', err);
+    }
+    const targetUrl = `/checkout/stripe?type=subscription&amount=5.00&title=${encodeURIComponent('AutonomOps Pro Owner Subscription')}&email=${encodeURIComponent(session?.email || 'owner@autonomops.io')}&name=${encodeURIComponent(session?.name || 'Business Owner')}&returnUrl=/dashboard`;
+    window.location.href = targetUrl;
   };
 
   const refreshLogs = () => {
@@ -245,65 +222,38 @@ export function OwnerDashboard({ onReturnHome, leads: propLeads, onUpdateLeadSta
     setApprovalModalLead(lead);
   };
 
-  // Execute $1.00 Owner Payment & AUTOMATICALLY APPROVE WORK
-  const handleConfirmPayAndApprove = () => {
+  // Handler for Owner Confirming $1.00 Match Fee — Redirects to Stripe Gateway
+  const handleConfirmPayAndApprove = async () => {
     if (!approvalModalLead) return;
 
     setIsProcessingApprovalFee(true);
     const targetLead = approvalModalLead;
 
-    setTimeout(async () => {
-      setIsProcessingApprovalFee(false);
-      const finalTiming = ownerTimings[targetLead.id] || targetLead.preferred_timeline || 'Tomorrow at 10:00 AM EST';
-
-      setDbLeads((prev) =>
-        prev.map((l) => (l.id === targetLead.id ? { ...l, status: 'owner_approved_awaiting_payment', preferred_timeline: finalTiming } : l))
-      );
-      onUpdateLeadStatus(targetLead.id, 'owner_approved_awaiting_payment');
-
-      try {
-        await fetch('/api/leads', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: targetLead.id,
-            status: 'owner_approved_awaiting_payment',
-            preferred_timeline: finalTiming
-          })
-        });
-      } catch (err) {
-        console.error('PostgreSQL status update error:', err);
+    try {
+      const res = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'match_fee',
+          amount: 1.00,
+          title: `Match Approval Fee for ${targetLead.full_name}`,
+          email: session?.email || 'owner@autonomops.io',
+          name: session?.name || 'Business Owner',
+          leadId: targetLead.id,
+          returnUrl: '/dashboard'
+        })
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+        return;
       }
+    } catch (err) {
+      console.error('Stripe Match Fee redirect error:', err);
+    }
 
-      if (session?.email) {
-        fetch('/api/owners', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: session.name || 'Business Owner',
-            email: session.email,
-            total_match_fees: 1.00,
-            total_approved_orders: 1
-          })
-        }).catch(console.error);
-
-        fetch('/api/payments', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_name: session.name || 'Business Owner',
-            user_email: session.email,
-            type: '$1.00 Match Approval Fee',
-            amount: 1.00,
-            description: `Approved lead request for ${targetLead.full_name} (${targetLead.project_type})`
-          })
-        }).catch(console.error);
-      }
-
-      setApprovalModalLead(null);
-      setNotificationMsg(`🎉 $1.00 Match Fee Processed! Work Request for ${targetLead.full_name} AUTOMATICALLY APPROVED & saved in PostgreSQL with Timing "${finalTiming}".`);
-      setTimeout(() => setNotificationMsg(''), 6000);
-    }, 1000);
+    const targetUrl = `/checkout/stripe?type=match_fee&amount=1.00&title=${encodeURIComponent(`Match Fee Approval for ${targetLead.full_name}`)}&email=${encodeURIComponent(session?.email || 'owner@autonomops.io')}&name=${encodeURIComponent(session?.name || 'Business Owner')}&leadId=${targetLead.id}&returnUrl=/dashboard`;
+    window.location.href = targetUrl;
   };
 
   // Handler for Owner Cancelling a Reservation in PostgreSQL
@@ -391,8 +341,21 @@ export function OwnerDashboard({ onReturnHome, leads: propLeads, onUpdateLeadSta
   // Combine DB leads and propLeads (empty by default for a fresh site)
   const rawLeads: Lead[] = dbLeads.length > 0 ? dbLeads : propLeads;
 
-  // WORK CATEGORY FILTERING AGENT LOGIC
+  // WORK CATEGORY & OWNER SPECIALTY FILTERING AGENT LOGIC
   const combinedLeads = rawLeads.filter((lead) => {
+    // 1. Filter by assigned owner email or work specialty if toggle is enabled
+    if (filterByMySpecialtyOnly && session?.email) {
+      const isMyAssignedLead = (lead.assigned_owner_email || '').toLowerCase() === session.email.toLowerCase();
+      if (!isMyAssignedLead) {
+        const ownerObj = dbOwners.find((o) => o.email.toLowerCase() === session.email.toLowerCase());
+        const spec = (ownerObj?.specialty || '').toLowerCase();
+        const pType = (lead.project_type || '').toLowerCase();
+        const matchesSpec = spec ? pType.includes(spec) || spec.includes(pType) : false;
+        if (!matchesSpec) return false;
+      }
+    }
+
+    // 2. Filter by selected category tab
     if (selectedWorkCategory === 'ALL') return true;
     return (lead.project_type || '').toLowerCase().includes(selectedWorkCategory.toLowerCase());
   });
@@ -571,9 +534,9 @@ export function OwnerDashboard({ onReturnHome, leads: propLeads, onUpdateLeadSta
       )}
 
       {/* Top Owner Header */}
-      <header className="border-b border-slate-200 bg-white px-6 py-4 shadow-sm">
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <div className="flex items-center space-x-6">
+      <header className="border-b border-slate-200 bg-white px-3 sm:px-6 py-4 shadow-sm">
+        <div className="mx-auto flex max-w-7xl flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex flex-col xs:flex-row items-start xs:items-center space-y-2 xs:space-y-0 xs:space-x-4 sm:space-x-6">
             <button
               onClick={onReturnHome}
               className="flex items-center space-x-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 transition-colors"
@@ -583,28 +546,29 @@ export function OwnerDashboard({ onReturnHome, leads: propLeads, onUpdateLeadSta
             </button>
 
             <div>
-              <div className="flex items-center space-x-2">
-                <h1 className="text-base font-bold text-slate-900">Owner Management Dashboard</h1>
-                <span className="font-mono text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 uppercase flex items-center gap-1">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                <h1 className="text-sm sm:text-base font-bold text-slate-900">Owner Management Dashboard</h1>
+                <span className="font-mono text-[9px] sm:text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 uppercase flex items-center gap-1">
                   <Database className="h-3 w-3" /> POSTGRES CONNECTED
                 </span>
-                <span className="font-mono text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 uppercase">
+                <span className="font-mono text-[9px] sm:text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 uppercase hidden md:inline-block">
                   $1.00 MATCH FEE GATEWAY ACTIVE
                 </span>
               </div>
-              <p className="font-mono text-[10px] uppercase tracking-widest text-slate-400">
+              <p className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest text-slate-400">
                 AUTONOMOPS WORK FILTER &amp; RESERVATION ENGINE
               </p>
             </div>
           </div>
 
           {/* Owner Credentials Info & Top-Right Profile Dropdown */}
-          <div className="flex items-center space-x-3 text-xs">
+          <div className="flex items-center justify-between w-full sm:w-auto space-x-2 sm:space-x-3 text-xs">
             <button
               onClick={onReturnHome}
-              className="flex items-center space-x-1.5 rounded-md bg-blue-600 px-3.5 py-1.5 font-medium text-white shadow hover:bg-blue-500 transition-colors cursor-pointer"
+              className="flex items-center space-x-1.5 rounded-md bg-blue-600 px-3 sm:px-3.5 py-1.5 text-xs font-medium text-white shadow hover:bg-blue-500 transition-colors cursor-pointer"
             >
-              <span>View Customer Agent</span>
+              <span className="hidden sm:inline">View Customer Agent</span>
+              <span className="sm:hidden">Agent View</span>
             </button>
 
             {/* Profile Dropdown in Top Right Corner */}
@@ -613,7 +577,7 @@ export function OwnerDashboard({ onReturnHome, leads: propLeads, onUpdateLeadSta
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-6 py-8 space-y-6">
+      <main className="mx-auto max-w-7xl px-3 sm:px-6 py-4 sm:py-8 space-y-6">
         {/* BUSINESS OWNER ACCOUNT & PROVIDED EMAIL ADDRESS BANNER */}
         {session && session.role === 'owner' && (
           <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-4 shadow-sm text-xs font-mono flex flex-col sm:flex-row items-center justify-between gap-3 text-blue-900">
@@ -651,7 +615,7 @@ export function OwnerDashboard({ onReturnHome, leads: propLeads, onUpdateLeadSta
           </div>
         )}
 
-        {/* WORK CATEGORY FILTER BAR */}
+        {/* WORK CATEGORY & OWNER SPECIALTY FILTER BAR */}
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm flex flex-col md:flex-row items-center justify-between gap-3 text-xs">
           <div className="flex items-center space-x-2 text-slate-700 font-bold font-mono">
             <Filter className="h-4 w-4 text-blue-600" />
@@ -659,6 +623,18 @@ export function OwnerDashboard({ onReturnHome, leads: propLeads, onUpdateLeadSta
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+            <button
+              onClick={() => setFilterByMySpecialtyOnly(!filterByMySpecialtyOnly)}
+              className={`px-3 py-1.5 rounded-lg border font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                filterByMySpecialtyOnly
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                  : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
+              }`}
+            >
+              <Briefcase className="h-3.5 w-3.5" />
+              <span>{filterByMySpecialtyOnly ? '🎯 My Specialty Work Only (Active)' : '🎯 Filter My Work Specialty'}</span>
+            </button>
+
             {WORK_CATEGORIES.map((cat) => (
               <button
                 key={cat.id}

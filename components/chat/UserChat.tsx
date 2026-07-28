@@ -227,38 +227,57 @@ export default function Chat({ onReturnHome, onLeadCreated }: UserChatProps) {
     return () => window.removeEventListener('autonomops_auth_change', handleAuthChange);
   }, []);
 
-  // Match Business Owners strictly based on client's chosen work
+  // Match Business Owners strictly based on client's chosen work domain
   const getMatchedOwnersForWork = (chosenWork: string) => {
     const workLower = (chosenWork || '').toLowerCase();
     
-    let defaultRole = 'Lead Software & Systems Architect';
-    let defaultSpecialty = 'Full-Stack Web, Microservices & AI Architecture';
+    let domainKeyword = 'web';
+    let defaultRole = 'Lead Full-Stack Web & Mobile Architect';
+    let defaultSpecialty = 'React, Next.js, Node.js & React Native App Specialist';
 
     if (workLower.includes('full-stack') || workLower.includes('web') || workLower.includes('mobile')) {
+      domainKeyword = 'web';
       defaultRole = 'Lead Full-Stack Web & Mobile Architect';
-      defaultSpecialty = 'Specialist in React, Next.js, Node.js & Mobile Native Apps';
+      defaultSpecialty = 'React, Next.js, Node.js & React Native App Specialist';
     } else if (workLower.includes('backend') || workLower.includes('microservices') || workLower.includes('api')) {
+      domainKeyword = 'api';
       defaultRole = 'Principal Backend & Microservices Architect';
-      defaultSpecialty = 'Specialist in REST/GraphQL APIs, PostgreSQL, Redis & Microservices';
+      defaultSpecialty = 'REST/GraphQL APIs, PostgreSQL, Redis & Microservices Specialist';
     } else if (workLower.includes('ai') || workLower.includes('llm') || workLower.includes('agent')) {
+      domainKeyword = 'ai';
       defaultRole = 'Lead AI Agent & LLM Systems Architect';
-      defaultSpecialty = 'Specialist in Autonomous AI Agents, Gemini & OpenAI APIs, RAG Pipelines';
+      defaultSpecialty = 'Autonomous AI Agents, Gemini & OpenAI APIs, RAG Specialist';
     } else if (workLower.includes('audit') || workLower.includes('security') || workLower.includes('performance')) {
+      domainKeyword = 'security';
       defaultRole = 'Chief Code Auditor & Security Lead Engineer';
-      defaultSpecialty = 'Specialist in Codebase Refactoring, Security Scans & Query Optimization';
+      defaultSpecialty = 'Codebase Refactoring, Security Scans & Query Optimization Specialist';
     } else if (workLower.includes('devops') || workLower.includes('cloud') || workLower.includes('ci/cd')) {
+      domainKeyword = 'cloud';
       defaultRole = 'Lead Cloud Infrastructure & DevOps Engineer';
-      defaultSpecialty = 'Specialist in AWS, GCP, Docker, Kubernetes & Automated CI/CD Pipelines';
+      defaultSpecialty = 'AWS, GCP, Docker, Kubernetes & Automated CI/CD Pipelines Specialist';
     }
 
+    // Filter database owners matching the specific work domain
     if (dbOwnersList.length > 0) {
-      return dbOwnersList.map((o) => ({
+      const filtered = dbOwnersList.filter((o) => {
+        const spec = (o.specialty || '').toLowerCase();
+        if (domainKeyword === 'web') return spec.includes('web') || spec.includes('mobile') || spec.includes('full-stack') || spec.includes('react');
+        if (domainKeyword === 'api') return spec.includes('api') || spec.includes('backend') || spec.includes('microservice') || spec.includes('postgres');
+        if (domainKeyword === 'ai') return spec.includes('ai') || spec.includes('llm') || spec.includes('agent') || spec.includes('rag');
+        if (domainKeyword === 'security') return spec.includes('audit') || spec.includes('security') || spec.includes('performance');
+        if (domainKeyword === 'cloud') return spec.includes('cloud') || spec.includes('devops') || spec.includes('docker') || spec.includes('aws');
+        return true;
+      });
+
+      const listToReturn = filtered.length > 0 ? filtered : dbOwnersList;
+
+      return listToReturn.map((o) => ({
         id: o.id,
         name: o.name,
         role: defaultRole,
         email: o.email,
         specialty: o.specialty || defaultSpecialty,
-        rating: '5.0 ★ Verified Specialist'
+        rating: '5.0 ★ Verified Work Specialist'
       }));
     }
 
@@ -280,7 +299,7 @@ export default function Chat({ onReturnHome, onLeadCreated }: UserChatProps) {
 
     return [
       {
-        id: 'owner_specialist',
+        id: `owner_${domainKeyword}`,
         name: ownerName,
         role: defaultRole,
         email: ownerEmail,
@@ -584,74 +603,92 @@ export default function Chat({ onReturnHome, onLeadCreated }: UserChatProps) {
   };
 
   // Handler for Stripe Payment Execution & Saving Confirmed Booking to PostgreSQL
-  const handlePayAndBook = () => {
+  const handlePayAndBook = async () => {
     setIsProcessingPayment(true);
-    setTimeout(async () => {
-      setIsProcessingPayment(false);
-      const appointment: BookedAppointment = {
-        id: `dev_apt_${Date.now()}`,
-        type: appointmentType,
-        timing: appointmentTiming,
-        name: fullName,
-        email: workEmail,
-        phone: mobilePhone,
-        projectExpectations: projectExpectations,
-        zip: zipCode,
-        totalQuoteMin: pricingAssessment.pricingBreakdown.min_quote,
-        totalQuoteMax: pricingAssessment.pricingBreakdown.max_quote,
-        depositAmount: pricingAssessment.pricingBreakdown.deposit_amount,
-        assignedOwnerName: selectedOwner.name,
-        assignedOwnerEmail: selectedOwner.email,
-        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
 
-      const leadData: Lead = {
-        id: appointment.id,
-        customer_id: `dev_${fullName.replace(/\s+/g, '_')}`,
-        full_name: fullName,
-        email: workEmail,
-        phone: mobilePhone,
-        zip_code: zipCode,
-        industry_category: 'Software & Tech Consulting',
-        project_type: appointmentType,
-        preferred_timeline: appointmentTiming,
-        scope: projectExpectations,
-        dispatch_path: 'AUTO',
-        status: 'deposit_paid',
-        pricing_breakdown: pricingAssessment.pricingBreakdown,
-        safety_flags: [],
-        assigned_owner_name: selectedOwner.name,
-        assigned_owner_email: selectedOwner.email,
-        created_at: new Date().toISOString()
-      };
+    const depositAmt = pricingAssessment.pricingBreakdown.deposit_amount || 75;
 
-      setBookedAppointment(appointment);
-      setStep('CONFIRMED');
+    // 1. Record lead state
+    const appointment: BookedAppointment = {
+      id: `dev_apt_${Date.now()}`,
+      type: appointmentType,
+      timing: appointmentTiming,
+      name: fullName,
+      email: workEmail,
+      phone: mobilePhone,
+      projectExpectations: projectExpectations,
+      zip: zipCode,
+      totalQuoteMin: pricingAssessment.pricingBreakdown.min_quote,
+      totalQuoteMax: pricingAssessment.pricingBreakdown.max_quote,
+      depositAmount: depositAmt,
+      assignedOwnerName: selectedOwner.name,
+      assignedOwnerEmail: selectedOwner.email,
+      createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
 
-      try {
-        await fetch('/api/leads', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(leadData)
-        });
-      } catch (err) {
-        console.error('Error updating deposit_paid status in PostgreSQL:', err);
+    const leadData: Lead = {
+      id: appointment.id,
+      customer_id: `dev_${fullName.replace(/\s+/g, '_')}`,
+      full_name: fullName,
+      email: workEmail,
+      phone: mobilePhone,
+      zip_code: zipCode,
+      industry_category: 'Software & Tech Consulting',
+      project_type: appointmentType,
+      preferred_timeline: appointmentTiming,
+      scope: projectExpectations,
+      dispatch_path: 'AUTO',
+      status: 'deposit_paid',
+      pricing_breakdown: pricingAssessment.pricingBreakdown,
+      safety_flags: [],
+      assigned_owner_name: selectedOwner.name,
+      assigned_owner_email: selectedOwner.email,
+      created_at: new Date().toISOString()
+    };
+
+    setBookedAppointment(appointment);
+
+    try {
+      await fetch('/api/leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(leadData)
+      });
+    } catch (err) {
+      console.error('Error saving lead to PostgreSQL:', err);
+    }
+
+    if (onLeadCreated) {
+      onLeadCreated(leadData);
+    }
+
+    // 2. Redirect directly to Stripe Gateway
+    try {
+      const res = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'deposit',
+          amount: depositAmt,
+          title: `Project Kickoff Deposit - ${appointmentType}`,
+          email: workEmail,
+          name: fullName,
+          leadId: appointment.id,
+          returnUrl: '/chat'
+        })
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+        return;
       }
+    } catch (err) {
+      console.error('Stripe redirect error:', err);
+    }
 
-      if (onLeadCreated) {
-        onLeadCreated(leadData);
-      }
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `a_${Date.now()}`,
-          role: 'owner',
-          senderName: selectedOwner.name,
-          text: `🎉 Deposit of $${pricingAssessment.pricingBreakdown.deposit_amount} received! Thank you ${fullName}. Direct chat is fully active — feel free to send any questions, specs, or repo details right here!`
-        }
-      ]);
-    }, 1200);
+    // Fallback URL redirect if API call completes
+    const fallbackTarget = `/checkout/stripe?type=deposit&amount=${depositAmt}&title=${encodeURIComponent(`Project Kickoff Deposit - ${appointmentType}`)}&email=${encodeURIComponent(workEmail)}&name=${encodeURIComponent(fullName)}&leadId=${appointment.id}&returnUrl=/chat`;
+    window.location.href = fallbackTarget;
   };
 
   // Interactive Messaging (Direct Messaging after approval & AI assistant during intake)
@@ -742,27 +779,28 @@ export default function Chat({ onReturnHome, onLeadCreated }: UserChatProps) {
   return (
     <div className="min-h-screen w-full bg-[#03060f] text-slate-100 font-sans selection:bg-blue-600 selection:text-white flex flex-col relative">
       {/* Header Bar */}
-      <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-800/80 bg-[#03060f]/90 px-6 backdrop-blur-md">
+      <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-800/80 bg-[#03060f]/90 px-3 sm:px-6 backdrop-blur-md">
         {/* Working Back Button */}
         <button
           onClick={onReturnHome}
-          className="flex items-center space-x-2 rounded-lg bg-slate-900/80 border border-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white hover:border-slate-700 transition-all cursor-pointer"
+          className="flex items-center space-x-1.5 sm:space-x-2 rounded-lg bg-slate-900/80 border border-slate-800 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-medium text-slate-300 hover:text-white hover:border-slate-700 transition-all cursor-pointer"
         >
           <ArrowLeft className="h-4 w-4" />
-          <span>Back to Home</span>
+          <span className="hidden sm:inline">Back to Home</span>
+          <span className="sm:hidden">Back</span>
         </button>
 
         {/* User Profile Icon Dropdown or Confirmed Developer Appointment Badge */}
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center space-x-2 sm:space-x-3">
           {currentUser && (
             <button
               onClick={() => {
                 fetchHistoryLeads();
                 setIsHistoryOpen(true);
               }}
-              className="flex items-center space-x-1.5 rounded-lg border border-blue-500/40 bg-blue-600/10 px-3 py-1.5 text-xs font-semibold text-blue-300 hover:bg-blue-600/20 hover:text-white transition-all cursor-pointer shadow-sm font-mono"
+              className="flex items-center space-x-1.5 rounded-lg border border-blue-500/40 bg-blue-600/10 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold text-blue-300 hover:bg-blue-600/20 hover:text-white transition-all cursor-pointer shadow-sm font-mono"
             >
-              <Clock className="h-4 w-4 text-blue-400" />
+              <Clock className="h-4 w-4 text-blue-400 shrink-0" />
               <span className="hidden sm:inline">View Work &amp; Chat History</span>
               <span className="sm:hidden">History</span>
             </button>
@@ -771,9 +809,9 @@ export default function Chat({ onReturnHome, onLeadCreated }: UserChatProps) {
           {currentUser ? (
             <UserProfileDropdown session={currentUser} />
           ) : (
-            <div className="flex items-center space-x-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 font-mono text-xs text-amber-400">
-              <Lock className="h-3.5 w-3.5 animate-pulse text-amber-400" />
-              <span className="font-semibold uppercase tracking-wider">LOGIN REQUIRED TO CHAT</span>
+            <div className="flex items-center space-x-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 sm:px-3 py-1.5 font-mono text-[10px] sm:text-xs text-amber-400">
+              <Lock className="h-3.5 w-3.5 animate-pulse text-amber-400 shrink-0" />
+              <span className="font-semibold uppercase tracking-wider hidden xs:inline">LOGIN REQUIRED</span>
             </div>
           )}
 
@@ -781,10 +819,11 @@ export default function Chat({ onReturnHome, onLeadCreated }: UserChatProps) {
             <div className="relative">
               <button
                 onClick={() => setShowCornerModal(!showCornerModal)}
-                className="flex items-center space-x-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-3.5 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 transition-all cursor-pointer shadow-lg shadow-emerald-500/10"
+                className="flex items-center space-x-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-2.5 sm:px-3.5 py-1.5 text-[11px] sm:text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 transition-all cursor-pointer shadow-lg shadow-emerald-500/10"
               >
-                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                <span className="font-semibold font-mono">Dev Consultation: {bookedAppointment.timing}</span>
+                <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                <span className="font-semibold font-mono hidden sm:inline">Dev Consultation: {bookedAppointment.timing}</span>
+                <span className="font-semibold font-mono sm:hidden">Consultation</span>
               </button>
             </div>
           )}
@@ -793,13 +832,13 @@ export default function Chat({ onReturnHome, onLeadCreated }: UserChatProps) {
 
       {/* LOGIN REQUIRED GATE MODAL OVERLAY */}
       {!currentUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 px-4 backdrop-blur-md">
-          <div className="relative w-full max-w-lg rounded-2xl border border-blue-900/60 bg-[#090d18] p-8 shadow-2xl space-y-6 text-slate-100 font-sans">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 px-3 sm:px-4 backdrop-blur-md">
+          <div className="relative w-[92vw] max-w-lg rounded-2xl border border-blue-900/60 bg-[#090d18] p-5 sm:p-8 shadow-2xl space-y-5 text-slate-100 font-sans">
             <div className="text-center space-y-2">
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600/20 border border-blue-500/40 text-blue-400 shadow-lg">
                 <Lock className="h-6 w-6 text-blue-400" />
               </div>
-              <h2 className="text-xl font-bold text-white tracking-tight">Login Required to Chat with Agent</h2>
+              <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">Login Required to Chat with Agent</h2>
               <p className="text-xs text-slate-400 max-w-sm mx-auto">
                 Please sign in to chat with the AutonomOps DevStudio AI agent and book software engineering appointments.
               </p>
@@ -879,7 +918,7 @@ export default function Chat({ onReturnHome, onLeadCreated }: UserChatProps) {
       )}
 
       {/* Main Interactive Chat & Developer Engine View */}
-      <main className={`mx-auto max-w-4xl w-full px-4 py-8 space-y-8 flex-1 flex flex-col justify-between overflow-y-auto ${!currentUser ? 'filter blur-sm pointer-events-none' : ''}`}>
+      <main className={`mx-auto max-w-4xl w-full px-3 sm:px-4 py-4 sm:py-8 space-y-6 sm:space-y-8 flex-1 flex flex-col justify-between overflow-y-auto ${!currentUser ? 'filter blur-sm pointer-events-none' : ''}`}>
         <div className="space-y-6">
           {/* STEP PROGRESS BAR INDICATOR */}
           {step !== 'AWAITING_OWNER_CONFIRM' && step !== 'OWNER_APPROVED' && step !== 'CONFIRMED' && (
@@ -888,7 +927,7 @@ export default function Chat({ onReturnHome, onLeadCreated }: UserChatProps) {
                 <span className="font-bold text-blue-400 flex items-center gap-1.5">
                   <Sparkles className="h-3.5 w-3.5" /> STEP {currentStepNum} OF 4
                 </span>
-                <span>
+                <span className="text-[11px] sm:text-xs">
                   {currentStepNum === 1 ? 'Select Service' : currentStepNum === 2 ? 'Select Lead Engineer' : currentStepNum === 3 ? 'Timing Slot' : 'Project Details & Expectations'}
                 </span>
               </div>
@@ -918,22 +957,22 @@ export default function Chat({ onReturnHome, onLeadCreated }: UserChatProps) {
           {messages.map((m) => (
             <div
               key={m.id}
-              className={`flex items-start space-x-3 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              className={`flex items-start space-x-2.5 sm:space-x-3 ${m.role === 'user' ? 'flex-row-reverse space-x-reverse' : ''}`}
             >
               {m.role === 'ai' && (
-                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 font-mono text-xs font-bold text-white shadow-md border border-blue-400/30">
+                <div className="flex h-7 w-7 sm:h-8 sm:w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 font-mono text-[10px] sm:text-xs font-bold text-white shadow-md border border-blue-400/30">
                   &lt;/&gt;
                 </div>
               )}
 
               {m.role === 'owner' && (
-                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-amber-600 to-emerald-600 font-mono text-xs font-bold text-white shadow-md border border-amber-400/40" title="Business Owner">
+                <div className="flex h-7 w-7 sm:h-8 sm:w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-amber-600 to-emerald-600 font-mono text-[10px] sm:text-xs font-bold text-white shadow-md border border-amber-400/40" title="Business Owner">
                   👑
                 </div>
               )}
 
               <div
-                className={`max-w-[78%] rounded-xl p-4 text-xs leading-relaxed ${
+                className={`max-w-[90%] sm:max-w-[78%] rounded-xl p-3.5 sm:p-4 text-xs leading-relaxed ${
                   m.role === 'user'
                     ? 'bg-blue-600 text-white font-medium shadow-lg shadow-blue-600/20'
                     : m.role === 'owner'
@@ -953,7 +992,7 @@ export default function Chat({ onReturnHome, onLeadCreated }: UserChatProps) {
 
           {/* STEP 1: OPTIONS FOR SERVICES WE PROVIDE */}
           {step === 'SELECT_TYPE' && (
-            <div className="pl-11 space-y-3">
+            <div className="pl-0 sm:pl-11 space-y-3">
               <p className="text-[11px] font-mono uppercase text-slate-400 tracking-wider font-semibold">
                 Services We Provide — Choose an Option:
               </p>
